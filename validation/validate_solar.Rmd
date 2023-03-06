@@ -1,0 +1,432 @@
+---
+title: "Solar Validation"
+output: 
+  html_document:
+    theme: sandstone
+editor_options: 
+  chunk_output_type: console
+params:
+  valid_year: 2007
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+xfun::pkg_attach2('ggplot2','scico','sf')
+xfun::pkg_load2('readr','hdf5r','dplyr','lubridate', 'tidyr', 'hydroGOF', 'rgdal', 'zoo')
+
+import::from(readr, read_csv, write_csv)
+import::from(hdf5r, H5File)
+import::from(dplyr, rename, mutate, bind_rows, select, summarise, group_by, inner_join,
+             filter, left_join, full_join, ungroup)
+import::from(lubridate, hours, minutes, ymd_hms, month, day, hour, with_tz)
+import::from(tidyr, pivot_longer, fill)
+import::from(tibble, tibble, rownames_to_column)
+import::from(hydroGOF, NSE, me, mae, pbias, nrmse, rSD, KGE)
+import::from(rgdal, readOGR)
+import::from(zoo, na.approx)
+```
+
+```{r config, include=FALSE}
+valid_year = params$valid_year
+pv_plants = read_csv('../data/meta_solar.csv', show=FALSE, progress=FALSE) |> 
+  tibble::rownames_to_column(var = 'site_id') |>
+  mutate(site_id=as.integer(site_id))
+
+valid_data_dir = 'valid_data/nsrdb'
+dir.create(valid_data_dir, recursive = TRUE, showWarnings = FALSE)
+
+h5_file = sprintf('../data/sam_resource/wrf_solar_1h_%s.h5',valid_year)
+```
+
+```{r shapefile, include=FALSE}
+ba_shp = readOGR('Elec_Control_Areas_BA/')
+ba_data = ba_shp@data
+ba_data$id = rownames(ba_data)
+bas = fortify(ba_shp) |> tibble() |> inner_join(ba_data, by='id')
+# takes forever to plot
+# ggplot(bas)+geom_polygon(aes(long,lat,fill=COMP_ABRV,group=group))
+
+ba_sf = read_sf('Elec_Control_Areas_BA/')
+ba_sf_pl = st_transform(ba_sf, 2163)
+dsf = st_transform(st_as_sf(pv_plants, coords=c("longitude","latitude"), crs=4326), 2163)
+int = st_intersects(dsf, ba_sf_pl)
+ba_ind = sapply(int,function(x){ifelse(length(x)>0,x,NA)})
+pv_plants$ba = ba_sf$COMP_ABRV[ba_ind]
+```
+
+## `r valid_year`
+
+<style type="text/css">
+div.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r functions, include=FALSE}
+single_stat_map <- function(stats, stat, filter_gt=NULL, filter_lt=NULL){
+  # data to draw states
+  states = map_data('state')
+  
+  # filter large and small values
+  if(is.null(filter_gt))filter_gt=max(stats[[stat]])
+  if(is.null(filter_lt))filter_lt=min(stats[[stat]])
+  gtpts = stats |> filter(!!as.name(stat)>filter_gt)
+  ltpts = stats |> filter(!!as.name(stat)<filter_lt)
+  filter_pts = rbind(gtpts,ltpts)
+  pts = stats |> filter(!!as.name(stat)>=filter_lt & !!as.name(stat)<=filter_gt)
+  
+  ggplot(pts)+
+    geom_polygon(aes(long, lat, group=group), color='black', fill='white', data=states)+
+    geom_point(aes_string('lon', 'lat', color=stat))+
+    geom_point(aes(lon, lat), shape=21, data=filter_pts)+
+    scale_color_viridis_c()+
+    facet_wrap(~variable) +
+    coord_quickmap(xlim=range(stats$lon),ylim=range(stats$lat))+
+    theme_minimal()+
+    labs(title=sprintf('Pointwise %s, empty dots indicate values outside the color range',
+                       stat))
+}
+
+ba_boxplot <- function(stats, v){
+  stats |> 
+    filter(abs(PBIAS)<100 & NRMSE < 200 & variable==v) |> 
+    pivot_longer(-c(lon,lat,point,variable,ba,timezone,elevation,site_id,generator_key,generator_name)) |> 
+    ggplot() +
+    geom_boxplot(aes(ba,value,fill=ba)) +
+    facet_wrap(~name,scales='free_y',nrow=2) +
+    theme_bw() +
+    scale_fill_discrete('Metric') +
+    labs(y=NULL,x=NULL,title=sprintf('Point Metrics: %s',v)) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, size=8, hjust=1)) 
+}
+```
+
+```{r process-data, include=FALSE}
+nsrdb_list = wrf_list = list()
+h5 = H5File$new(h5_file)
+
+ghi_wrf = h5[['ghi']]$read()
+dni_wrf = h5[['dni']]$read()
+airtemp_wrf = h5[['air_temperature']]$read()
+windspeed_wrf = h5[['wind_speed']]$read()
+datetime_wrf = ymd_hms(h5[['time_index']]$read())
+
+h5$close_all()
+
+wrf_cache_fn = sprintf('valid_data/cache/wrf_solar_list_%s.rds',valid_year)
+nsrdb_cache_fn = sprintf('valid_data/cache/nsrdb_list_%s.rds',valid_year)
+
+if(file.exists(nsrdb_cache_fn)){
+  nsrdb_list = readRDS(nsrdb_cache_fn)
+}else{
+  stop('No cached NSRDB data.')
+}
+
+if(file.exists(wrf_cache_fn)){
+  wrf_list = readRDS(wrf_cache_fn)
+}else{
+  for (pointi in 1:nrow(pv_plants)){
+    lat = pv_plants$latitude[pointi]
+    lon = pv_plants$longitude[pointi]
+    wrf_list[[pointi]] = tibble(datetime=datetime_wrf,
+                                point=pointi,
+                                lat=lat, lon=lon,
+                                ghi=ghi_wrf[pointi,],
+                                dni=dni_wrf[pointi,],
+                                airtemp=airtemp_wrf[pointi,],
+                                windspeed=windspeed_wrf[pointi,])
+  }
+  saveRDS(wrf_list, wrf_cache_fn)
+}
+
+nsrdb = bind_rows(nsrdb_list) |> 
+  select(datetime, point, lat, lon, ghi, dni, windspeed, airtemp) |>
+  pivot_longer(-c(datetime,lat,lon,point), names_to='variable', values_to='nsrdb')
+
+wrf = bind_rows(wrf_list) |> 
+  select(datetime, point, lat, lon, ghi, dni, windspeed, airtemp) |>
+  pivot_longer(-c(datetime,lat,lon,point), names_to='variable', values_to='wrf')
+
+valid = inner_join(nsrdb, wrf, by=c('datetime','point','lat','lon','variable')) |>
+  mutate(err=nsrdb-wrf,
+         datetime_pacific=with_tz(datetime,'US/Pacific'), 
+         month=month(datetime_pacific),
+         day=day(datetime_pacific),
+         hour=hour(datetime_pacific))
+
+valid_hour_ave = valid |> 
+  group_by(hour,point,variable) |> 
+  summarise(nsrdb=mean(nsrdb), wrf=mean(wrf), error=mean(err),.groups='drop')
+
+valid_monthly_ave = valid |> 
+  group_by(month,point,variable) |> 
+  summarise(nsrdb=mean(nsrdb), wrf=mean(wrf), error=mean(err),.groups='drop')
+
+# bias corrected ghi
+valid_bc = valid |> 
+  filter(variable %in% c('ghi','dni')) |> 
+  group_by(point) |> 
+  #mutate(wrf = ifelse(wrf==0,0,quantile(nsrdb[nsrdb>0],ecdf(wrf[wrf>0])(wrf)))) |>
+  mutate(wrf = ifelse(wrf==0,0,quantile(nsrdb,ecdf(wrf)(wrf)))) |>
+  ungroup() |>
+  bind_rows(valid |> filter(!(variable %in% c('ghi','dni'))))
+
+valid_hour_ave_bc = valid_bc |> 
+  group_by(hour,point,variable) |> 
+  summarise(nsrdb=mean(nsrdb), wrf=mean(wrf), error=mean(err),.groups='drop')
+
+valid_monthly_ave_bc = valid_bc |> 
+  group_by(month,point,variable) |> 
+  summarise(nsrdb=mean(nsrdb), wrf=mean(wrf), error=mean(err),.groups='drop')
+
+stats = valid |> 
+  group_by(lon,lat,point,variable) |> 
+  summarise(r=cor(wrf, nsrdb),
+            NSE=NSE(wrf, nsrdb),
+            KGE=KGE(wrf, nsrdb),
+            NRMSE=nrmse(wrf, nsrdb),
+            PBIAS=pbias(wrf, nsrdb),
+            rSD=rSD(wrf, nsrdb),
+            .groups='drop') |>
+  inner_join(pv_plants |> 
+               rename(lat=latitude,lon=longitude),
+             by=c('lon','lat'))
+
+suppressWarnings({
+  stats_hourly = valid |> 
+    group_by(lon,lat,point,variable,hour) |> 
+    summarise(r=cor(wrf, nsrdb),
+              NSE=NSE(wrf, nsrdb),
+              KGE=KGE(wrf, nsrdb),
+              NRMSE=nrmse(wrf, nsrdb),
+              PBIAS=pbias(wrf, nsrdb),
+              rSD=rSD(wrf, nsrdb),
+              ME=me(wrf, nsrdb),
+              MAE=mae(wrf, nsrdb),
+              .groups='drop') |>
+    inner_join(pv_plants |> 
+                 rename(lat=latitude,lon=longitude),
+               by=c('lon','lat'))
+})
+```
+
+```{r power-data, include=FALSE}
+read_and_format_power_data <- function(fn){
+  read_csv(fn, show=FALSE, progress=FALSE) |>
+  rename(datetime=index) |>
+  mutate(datetime=ymd_hms(datetime),
+         datetime_central=with_tz(datetime,'US/Central'),
+         month=month(datetime_central),
+         day=day(datetime_central),
+         hour=hour(datetime_central)) |>
+  pivot_longer(-c(datetime,datetime_central,month,day,hour), names_to = 'site_id') |>
+  mutate(site_id = as.integer(site_id) + 1)
+}
+
+nsrdb_power = read_and_format_power_data(sprintf('valid_data/nsrdb_power_%s.csv',valid_year)) |> 
+  rename(nsrdb=value)
+wrf_power = read_and_format_power_data(sprintf('valid_data/wrf_solar_power_%s.csv',valid_year)) |> 
+  rename(wrf=value)
+power = nsrdb_power |> 
+  inner_join(wrf_power, by = c('datetime','datetime_central','month','day','hour','site_id')) |> 
+  left_join(pv_plants, by = "site_id") |>
+  mutate(error=nsrdb-wrf)
+suppressWarnings({
+  power_stats = power |> 
+    group_by(longitude,latitude, site_id, ba, hour) |> 
+    summarise(r=cor(wrf, nsrdb),
+              NNSE=1/(2-NSE(wrf, nsrdb)),
+              KGE=KGE(wrf, nsrdb),
+              NRMSE=nrmse(wrf, nsrdb),
+              PBIAS=pbias(wrf, nsrdb),
+              rSD=rSD(wrf, nsrdb),
+              ME=me(wrf, nsrdb),
+              MAE=mae(wrf, nsrdb),
+              .groups='drop')
+})
+```
+
+```{r, fig.width=10}
+# boxplots of all sites
+stats |> 
+  filter(abs(PBIAS)<100) |> 
+  pivot_longer(-c(lon,lat,point,variable,ba,timezone,elevation,site_id,generator_key,generator_name)) |> 
+  ggplot()+
+  geom_boxplot(aes(variable,value,fill=name))+
+  facet_wrap(~name,scales='free_y',nrow=2)+
+  theme_minimal()+
+  scale_fill_discrete('Metric')+
+  labs(y=NULL,x=NULL,title='Point Metrics')
+```
+
+```{r, fig.height=8, fig.width=12}
+ba_boxplot(stats,'ghi')
+```
+
+```{r, fig.height=8, fig.width=12}
+ba_boxplot(stats,'dni')
+```
+
+```{r, fig.height=8, fig.width=12}
+ba_boxplot(stats,'airtemp')
+```
+
+```{r, fig.height=8, fig.width=12}
+ba_boxplot(stats,'windspeed')
+```
+
+## Spatial 
+```{r, fig.height=8}
+single_stat_map(stats,'r')
+```
+
+```{r, fig.height=8}
+single_stat_map(stats, 'PBIAS', 100, -100)
+```
+
+```{r, fig.height=8}
+single_stat_map(stats, 'rSD', 2, 0)
+```
+
+```{r, fig.height=8}
+single_stat_map(stats, 'KGE',1, -1)
+```
+
+# Hourly
+```{r, fig.width=10, fig.height=10}
+valid_hour_ave |> 
+  ggplot()+
+  geom_boxplot(aes(factor(hour),nsrdb,group=hour,fill='NSRDB'),alpha=.75,outlier.shape=NA)+
+  geom_boxplot(aes(factor(hour),wrf,group=hour,fill='WRF'),alpha=0.75,outlier.shape=NA)+
+  facet_wrap(~variable,scales='free_y',labeller = as_labeller(
+               c(airtemp = "Air Temperature [C]", 
+                 dni = "DNI [W/m2]",
+                 ghi = "GHI [W/m2]",
+                 windspeed = "Wind Speed [m/s]")), 
+             strip.position='left')+
+  scale_fill_manual('Dataset',values=c(NSRDB='orange',WRF='steelblue'))+
+  theme_minimal()+
+  labs(y=NULL, x='Hour', title = 'Average hourly wind across all sites')+
+  theme(strip.background = element_blank(), strip.placement = "outside")
+```
+
+```{r, fig.width=10, fig.height=5}
+# valid_hour_ave_bc |>
+#   filter(variable %in% c('ghi','dni')) |>
+#   ggplot()+
+#   geom_boxplot(aes(factor(hour),nsrdb,group=hour,fill='NSRDB'),alpha=.75,outlier.shape=NA)+
+#   geom_boxplot(aes(factor(hour),wrf,group=hour,fill='WRF'),alpha=0.75,outlier.shape=NA)+
+#   facet_wrap(~variable,scales='free_y',labeller = as_labeller(
+#                c(airtemp = "Air Temperature [C]", 
+#                  dni = "DNI [W/m2]",
+#                  ghi = "GHI [W/m2]",
+#                  windspeed = "Wind Speed [m/s]")), 
+#              strip.position='left')+
+#   scale_fill_manual('Dataset',values=c(NSRDB='orange',WRF='steelblue'))+
+#   theme_minimal()+
+#   labs(y=NULL, x='Hour', title = 'Bias Corrected average hourly wind across all sites')+
+#   theme(strip.background = element_blank(), strip.placement = "outside")
+```
+
+```{r, fig.width=10, fig.height=10}
+valid_hour_ave |> 
+  ggplot()+
+  geom_boxplot(aes(factor(hour),error,group=hour, fill=variable),outlier.shape=NA)+
+  facet_wrap(~variable,scales='free_y',labeller = as_labeller(
+               c(airtemp = "Air Temperature [C]", 
+                 dni = "DNI [W/m2]",
+                 ghi = "GHI [W/m2]",
+                 windspeed = "Wind Speed [m/s]")), 
+             strip.position='left')+
+  theme_minimal()+
+  labs(y=NULL, x='Hour', title = 'Average hourly wind across all sites')+
+  theme(strip.background = element_blank(), strip.placement = "outside")
+```
+
+```{r monthly-ave, fig.width=10, fig.height=10}
+valid_monthly_ave |> 
+  ggplot()+
+  geom_boxplot(aes(factor(month),nsrdb,group=month,fill='NSRDB'),
+               alpha=0.75,outlier.shape=NA)+
+  geom_boxplot(aes(factor(month),wrf,group=month,fill='WRF'),
+               alpha=0.75,outlier.shape=NA)+
+  facet_wrap(~variable,scales='free_y',labeller = as_labeller(
+               c(airtemp = "Air Temperature [C]", 
+                 dni = "DNI [W/m2]",
+                 ghi = "GHI [W/m2]",
+                 windspeed = "Wind Speed [m/s]")), 
+             strip.position='left')+
+  scale_fill_manual('',values=c(NSRDB='orange',WRF='steelblue'))+
+  theme_minimal()+
+  labs(x='Month', y=NULL, title = 'Average monthly wind across all sites')+
+  theme(strip.background = element_blank(), strip.placement = "outside")
+```
+
+
+```{r, fig.width=10, fig.height=10}
+valid_monthly_ave |> 
+  ggplot()+
+  geom_boxplot(aes(factor(month),error,group=month, fill=variable),outlier.shape=NA)+
+  facet_wrap(~variable,scales='free_y',labeller = as_labeller(
+               c(airtemp = "Air Temperature [C]", 
+                 dni = "DNI [W/m2]",
+                 ghi = "GHI [W/m2]",
+                 windspeed = "Wind Speed [m/s]")), 
+             strip.position='left')+
+  theme_minimal()+
+  labs(y=NULL, title = 'Average monthly wind error across all sites')+
+  theme(strip.background = element_blank(), strip.placement = "outside")
+```
+
+# Power by BA
+```{r, fig.width=10, fig.height=10}
+ggplot(valid |> filter(variable=='ghi') |>
+         inner_join(pv_plants |> 
+                      rename(lat=latitude,lon=longitude), 
+                    by=c('lon','lat')))+
+  geom_boxplot(aes(hour,err,group=hour),outlier.shape=NA)+
+  facet_wrap(~ba)+
+  labs(title='Error in hourly GHI by BA', 
+       y='GHI Error (w/m^2)')+
+  theme_bw()+
+  coord_cartesian(ylim=c(-500,500))
+```
+
+```{r, fig.width=10, fig.height=10}
+ggplot(power)+
+  geom_boxplot(aes(hour,error,group=hour),outlier.shape=NA)+
+  facet_wrap(~ba)+
+  labs(title='Error in hourly capacity factor by BA',
+       y='Capacity Factor Error')+
+  theme_bw()+
+  coord_cartesian(ylim=c(-0.5,0.5))
+```
+
+```{r, fig.width=10, fig.height=10}
+ggplot(stats_hourly |> filter(variable=='ghi'))+
+  geom_boxplot(aes(hour,ME,group=hour),outlier.size = .5)+
+  labs(title='Mean Error in hourly GHI factor by BA',
+       y='Mean Error (W/m^2)')+
+  facet_wrap(~ba,ncol = 5)+theme_bw()
+```
+
+```{r, fig.width=10, fig.height=10}
+ggplot(power_stats)+
+  geom_boxplot(aes(hour,ME,group=hour),outlier.size = .5)+
+  labs(title='Mean Error in hourly capacity factor by BA',
+       y='Mean Error (Capacity Factor)')+
+  facet_wrap(~ba,ncol = 5)+theme_bw()
+```
+
+```{r, fig.width=10, fig.height=10}
+ggplot(power_stats)+
+  geom_boxplot(aes(hour,PBIAS,group=hour),outlier.size = .5)+
+  facet_wrap(~ba,ncol = 5)+
+  labs(title='% Bias in hourly capacity factor by BA',
+       y='% Bias')+
+  coord_cartesian(ylim=c(-100,100))+
+  theme_bw()
+```

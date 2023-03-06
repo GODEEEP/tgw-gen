@@ -1,0 +1,22 @@
+#weird antivirus file
+~WRL0701.tmp
+
+#maching learning models not used right now
+power_curve_ML.py
+power_curves_for_ML.csv
+
+#ignore output jsons
+solar_configs/*
+wind_configs/*
+csp_tower_configs/*
+csp_trough_configs/*
+
+#written out process for wind config generation
+config_file_generation_process.docx
+
+#csp files for now
+csp*
+
+sam_rev_wind_example.ipynb
+generated_coordinates.png
+wind_generator_coordinates.csv

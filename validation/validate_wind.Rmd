@@ -1,0 +1,437 @@
+---
+title: "Wind Validation"
+output: 
+  html_document:
+    theme: sandstone
+editor_options: 
+  chunk_output_type: console
+params:
+  valid_year: 2008
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+xfun::pkg_attach2('ggplot2','scico','sf')
+xfun::pkg_load2('readr','hdf5r','dplyr','lubridate', 'tidyr', 'hydroGOF', 'rgdal', 'zoo')
+
+import::from(readr, read_csv, write_csv)
+import::from(hdf5r, H5File)
+import::from(dplyr, rename, mutate, bind_rows, select, summarise, group_by, inner_join,
+             filter, left_join, full_join)
+import::from(lubridate, hours, minutes, ymd_hms, month, day, hour, with_tz)
+import::from(tidyr, pivot_longer, fill)
+import::from(tibble, tibble, rownames_to_column)
+import::from(hydroGOF, NSE, me, mae, pbias, nrmse, rSD, KGE)
+import::from(rgdal, readOGR)
+import::from(zoo, na.approx)
+```
+
+```{r config, include=FALSE}
+valid_year = params$valid_year
+wind_plants = read_csv('../data/meta_wind.csv', show=FALSE, progress=FALSE) |> 
+  tibble::rownames_to_column(var = 'site_id') |>
+  mutate(site_id=as.integer(site_id))
+
+valid_data_dir = 'valid_data/wtk'
+dir.create(valid_data_dir, recursive = TRUE, showWarnings = FALSE)
+
+readRenviron('../.env')
+
+h5_file = sprintf('../data/sam_resource/wrf_wind_1h_%s.h5',valid_year)
+```
+
+```{r shapefile, include=FALSE}
+ba_shp = readOGR('Elec_Control_Areas_BA/')
+ba_data = ba_shp@data
+ba_data$id = rownames(ba_data)
+bas = fortify(ba_shp) |> tibble() |> inner_join(ba_data, by='id')
+# takes forever to plot
+# ggplot(bas)+geom_polygon(aes(long,lat,fill=COMP_ABRV,group=group))
+
+ba_sf = read_sf('Elec_Control_Areas_BA')
+ba_sf_pl = st_transform(ba_sf, 2163)
+dsf = st_transform(st_as_sf(wind_plants, coords=c("longitude","latitude"), crs=4326), 2163)
+int = st_intersects(dsf, ba_sf_pl)
+ba_ind = sapply(int,function(x){ifelse(length(x)>0,x,NA)})
+wind_plants$ba = ba_sf$COMP_ABRV[ba_ind]
+```
+
+## `r valid_year`
+
+<style type="text/css">
+div.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r functions, include=FALSE}
+single_stat_map <- function(stats, stat, filter_gt=NULL, filter_lt=NULL,
+                            color_type='continous',midpoint=0){
+  # data to draw states
+  states = map_data('state')
+  
+  # filter large and small values
+  if(is.null(filter_gt))filter_gt=max(stats[[stat]])
+  if(is.null(filter_lt))filter_lt=min(stats[[stat]])
+  gtpts = stats |> filter(!!as.name(stat)>filter_gt)
+  ltpts = stats |> filter(!!as.name(stat)<filter_lt)
+  filter_pts = rbind(gtpts,ltpts)
+  pts = stats |> filter(!!as.name(stat)>=filter_lt & !!as.name(stat)<=filter_gt)
+  
+  ggplot(pts)+
+    geom_polygon(aes(long, lat, group=group), color='black', fill='white', data=states) +
+    geom_point(aes(lon, lat), shape=21, data=filter_pts) +
+    geom_point(aes_string('lon', 'lat', color=stat)) +
+    facet_wrap(~variable) + 
+    {if(color_type == 'diverging'){
+      scale_color_scico(palette = 'roma',midpoint = midpoint)
+    }else if(color_type == 'continuous'){
+      scale_color_viridis_c()
+    }} +
+    coord_quickmap(xlim=range(stats$lon),ylim=range(stats$lat)) +
+    theme_minimal() +
+    labs(title=sprintf('Pointwise %s, empty dots indicate values outside the color range',
+                       stat))
+}
+
+ba_boxplot <- function(stats, v){
+  stats |> 
+    filter(abs(PBIAS)<100 & NRMSE < 200 & variable==v) |> 
+    pivot_longer(-c(lon,lat,point,variable,ba,timezone,elevation,site_id,generator_key,generator_name)) |> 
+    ggplot() +
+    geom_boxplot(aes(ba,value,fill=ba)) +
+    facet_wrap(~name,scales='free_y',nrow=2) +
+    theme_bw() +
+    scale_fill_discrete('Metric') +
+    labs(y=NULL,x=NULL,title=sprintf('Point Metrics: %s',v)) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, size=8, hjust=1)) 
+}
+```
+
+```{r process-data, include=FALSE}
+wtk_list = wrf_list = list()
+h5 = H5File$new(h5_file)
+
+windspeed_80m_wrf = h5[['windspeed_80m']]$read()
+winddir_80m_wrf = h5[['winddirection_80m']]$read()
+temp_80m_wrf = h5[['temperature_80m']]$read()
+pressure_80m_wrf = h5[['pressure_80m']]$read()
+u_80m_wrf = -windspeed_80m_wrf*sin(winddir_80m_wrf*pi/180)
+v_80m_wrf = -windspeed_80m_wrf*cos(winddir_80m_wrf*pi/180)
+datetime_wrf = ymd_hms(h5[['time_index']]$read())
+
+h5$close_all()
+
+wtk_cache_fn = sprintf('valid_data/cache/wtk_list_%s.rds',valid_year)
+wrf_cache_fn = sprintf('valid_data/cache/wrf_wind_list_%s.rds',valid_year)
+
+if(file.exists(wtk_cache_fn) & file.exists(wrf_cache_fn)){
+  wtk_list = readRDS(wtk_cache_fn)
+  wrf_list = readRDS(wrf_cache_fn)
+}else{
+  for (pointi in 1:nrow(wind_plants)){
+    lat = wind_plants$latitude[pointi]
+    lon = wind_plants$longitude[pointi]
+    ba = wind_plants$ba[pointi]
+    message(pointi, ' ', lat,' ', lon)
+    csv_fn = file.path(valid_data_dir, sprintf('wtk_%s_%04d.csv',valid_year, pointi))
+    if(file.exists(csv_fn)){
+      wtk_list[[pointi]] = read_csv(csv_fn, show=FALSE, progress=FALSE)
+    }else{
+      wtk_list[[pointi]] = wtk_point(lat, lon, valid_year) |> 
+        mutate(point=pointi,lat=lat,lon=lon)
+      write_csv(wtk_list[[pointi]], csv_fn)
+    }
+    
+    # interpolate the data at every 30 minutes to the whole hour
+    mind = min(wtk_list[[pointi]]$datetime)
+    maxd = max(wtk_list[[pointi]]$datetime)
+    d1 = data.frame(datetime=seq(mind-minutes(30),maxd,by='30 min'))
+    d2 = data.frame(datetime=seq(mind-minutes(30),maxd-minutes(30),by='1 hour'))
+    
+    wtk_list[[pointi]] = d1 |>
+      full_join(wtk_list[[pointi]],by='datetime') |>
+      mutate(windspeed_80m = na.approx(`wind speed at 80m (m/s)`,na.rm=FALSE),
+             winddir_80m=na.approx(`wind direction at 80m (deg)`,na.rm=FALSE), 
+             temp_80m=na.approx(`air temperature at 80m (C)`,na.rm=FALSE), 
+             pressure_80m=na.approx(`air pressure at 100m (Pa)`,na.rm=FALSE)) |>
+      fill(point, lat, lon, windspeed_80m, winddir_80m, temp_80m, pressure_80m, .direction='up') |>
+      inner_join(d2,by='datetime')
+    
+    # format the wrf data 
+    wrf_list[[pointi]] = tibble(datetime=datetime_wrf,
+                                point=pointi,
+                                lat=lat, lon=lon,
+                                u_80m=u_80m_wrf[pointi,],
+                                v_80m=v_80m_wrf[pointi,],
+                                windspeed_80m=windspeed_80m_wrf[pointi,],
+                                temp_80m=temp_80m_wrf[pointi,],
+                                pressure_80m=pressure_80m_wrf[pointi,])
+  }
+  saveRDS(wtk_list, wtk_cache_fn)
+  saveRDS(wrf_list, wrf_cache_fn)
+}
+
+wtk = bind_rows(wtk_list) |> 
+  select(datetime, point, lat, lon, windspeed_80m, winddir_80m, temp_80m, pressure_80m) |>
+  mutate(u_80m=-windspeed_80m*cos(winddir_80m*pi/180),
+         v_80m=-windspeed_80m*sin(winddir_80m*pi/180)) |>
+  select(-c(winddir_80m)) |>
+  pivot_longer(-c(datetime,lat,lon,point), names_to='variable', values_to='wtk')
+
+wrf = bind_rows(wrf_list) |> 
+  pivot_longer(-c(datetime,lat,lon,point), names_to='variable', values_to='wrf')
+
+valid = inner_join(wtk, wrf, by=c('datetime','point','lat','lon','variable')) |>
+  mutate(err=wtk-wrf,
+         datetime_pacific=with_tz(datetime,'US/Pacific'), 
+         month=month(datetime_pacific),
+         day=day(datetime_pacific),
+         hour=hour(datetime_pacific))
+
+valid_hour_ave = valid |> 
+  group_by(hour,point,variable) |> 
+  summarise(wtk=mean(wtk), wrf=mean(wrf), error=mean(err),.groups='drop')
+
+valid_monthly_ave = valid |> 
+  group_by(month,point,variable) |> 
+  summarise(wtk=mean(wtk), wrf=mean(wrf), error=mean(err),.groups='drop')
+
+stats = valid |> 
+  group_by(lon,lat,point,variable) |> 
+  summarise(r=cor(wrf, wtk),
+            NNSE=1/(2-NSE(wrf, wtk)),
+            KGE=KGE(wrf, wtk),
+            NRMSE=nrmse(wrf, wtk),
+            PBIAS=pbias(wrf, wtk),
+            rSD=rSD(wrf, wtk),
+            .groups='drop') |>
+  inner_join(wind_plants |> 
+               rename(lat=latitude,lon=longitude),
+             by=c('lon','lat'))
+
+suppressWarnings({
+  stats_hourly = valid |> 
+    group_by(lon,lat,point,variable,hour) |> 
+    summarise(r=cor(wrf, wtk),
+              NSE=NSE(wrf, wtk),
+              KGE=KGE(wrf, wtk),
+              NRMSE=nrmse(wrf, wtk),
+              PBIAS=pbias(wrf, wtk),
+              rSD=rSD(wrf, wtk),
+              ME=me(wrf, wtk),
+              MAE=mae(wrf, wtk),
+              .groups='drop') |>
+    inner_join(wind_plants |> rename(lat=latitude,lon=longitude),
+               by=c('lon','lat'))
+})
+```
+
+```{r power-data, include=FALSE}
+read_and_format_power_data <- function(fn){
+  read_csv(fn, show=FALSE, progress=FALSE) |>
+  rename(datetime=index) |>
+  mutate(datetime=ymd_hms(datetime),
+         datetime_central=with_tz(datetime,'US/Central'),
+         month=month(datetime_central),
+         day=day(datetime_central),
+         hour=hour(datetime_central)) |>
+  pivot_longer(-c(datetime,datetime_central,month,day,hour), names_to = 'site_id') |>
+  mutate(site_id = as.integer(site_id) + 1)
+}
+
+wtk_power = read_and_format_power_data('valid_data/wtk_power_2014.csv') |> rename(wtk=value)
+wrf_power = read_and_format_power_data('valid_data/wrf_wind_power_2014.csv') |> rename(wrf=value)
+power = wtk_power |> 
+  inner_join(wrf_power, by = c('datetime','datetime_central','month','day','hour','site_id')) |> 
+  left_join(wind_plants, by = "site_id") |>
+  mutate(error=wtk-wrf)
+power_stats = power |> 
+  group_by(longitude,latitude, site_id, ba, hour, generator_key, generator_name) |> 
+  summarise(r=cor(wrf, wtk),
+            NNSE=1/(2-NSE(wrf, wtk)),
+            KGE=KGE(wrf, wtk),
+            NRMSE=nrmse(wrf, wtk),
+            PBIAS=pbias(wrf, wtk),
+            rSD=rSD(wrf, wtk),
+            ME=me(wrf, wtk),
+            MAE=mae(wrf, wtk),
+            .groups='drop')
+```
+
+```{r, fig.width=12}
+stats |> 
+  filter(abs(PBIAS) < 100 & NRMSE < 200) |> 
+  pivot_longer(-c(lon,lat,point,variable,ba,timezone,site_id,elevation,generator_key,generator_name)) |> 
+  ggplot() +
+  geom_boxplot(aes(variable,value,fill=name)) +
+  facet_wrap(~name,scales='free_y',nrow=2) +
+  theme_minimal() +
+  scale_fill_discrete('Metric') +
+  labs(y=NULL,x=NULL,title='Point Metrics') +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+# boxplots of all sites
+```
+
+```{r, fig.height=8, fig.width=12}
+ba_boxplot(stats,'pressure_80m')
+```
+
+```{r, fig.height=8, fig.width=12}
+ba_boxplot(stats,'temp_80m')
+```
+```{r, fig.height=8, fig.width=12}
+ba_boxplot(stats,'windspeed_80m')
+```
+
+```{r, fig.height=8, fig.width=12}
+ba_boxplot(stats,'u_80m')
+```
+
+```{r, fig.height=8, fig.width=12}
+ba_boxplot(stats,'v_80m')
+```
+
+
+## Spatial 
+```{r, fig.height=8, fig.width=10}
+single_stat_map(stats,'r',NULL,NULL,'continuous')
+```
+
+```{r, fig.height=8, fig.width=10}
+single_stat_map(stats, 'PBIAS', 100, -100, 'diverging')
+```
+
+```{r, fig.height=8, fig.width=10}
+single_stat_map(stats, 'rSD', 2, 0, color_type = 'diverging', midpoint=1)
+```
+
+```{r, fig.height=8, fig.width=10}
+single_stat_map(stats, 'KGE',1, -1, 'diverging', midpoint=-0.41)
+```
+
+# Hourly
+```{r, fig.width=10, fig.height=10}
+valid_hour_ave |> 
+  ggplot()+
+  geom_boxplot(aes(factor(hour),wtk,group=hour,fill='WTK'),
+               alpha=0.75,outlier.shape=NA)+
+  geom_boxplot(aes(factor(hour),wrf,group=hour,fill='WRF'),
+               alpha=0.75,outlier.shape=NA)+
+  facet_wrap(~variable,scales='free_y',labeller = as_labeller(
+               c(temp_80m = "Air Temperature at 80 m [C]", 
+                 pressure_80m = "Pressure at 80 m [Pa]",
+                 u_80m = "U at 80 m [m/s]",
+                 v_80m = "V at 80 m [m/s]",
+                 windspeed_80m = "Wind Speed at 80 m [m/s]")),
+             strip.position='left')+
+  scale_fill_manual('Dataset',values=c(WTK='orange',WRF='steelblue'))+
+  theme_minimal()+
+  labs(y=NULL, x='Hour', title = 'Average hourly wind across all sites')+
+  theme(strip.background = element_blank(), strip.placement = "outside")
+```
+
+```{r, fig.width=10, fig.height=10}
+valid_hour_ave |> 
+  ggplot()+
+  geom_boxplot(aes(factor(hour),error,group=hour, fill=variable),outlier.shape=NA)+
+  facet_wrap(~variable,scales='free_y',labeller = as_labeller(
+               c(temp_80m = "Air Temperature at 80 m [C]", 
+                 pressure_80m = "Pressure at 80 m [Pa]",
+                 u_80m = "U at 80 m [m/s]",
+                 v_80m = "V at 80 m [m/s]",
+                 windspeed_80m = "Wind Speed at 80 m [m/s]")), 
+             strip.position='left')+
+  theme_minimal()+
+  labs(y=NULL, x='Hour', title = 'Average hourly wind across all sites')+
+  theme(strip.background = element_blank(), strip.placement = "outside")
+```
+
+```{r monthly-ave, fig.width=10, fig.height=10}
+valid_monthly_ave |> 
+  ggplot()+
+  geom_boxplot(aes(factor(month),wtk,group=month,fill='WTK'),
+               alpha=0.75,outlier.shape=NA)+
+  geom_boxplot(aes(factor(month),wrf,group=month,fill='WRF'),
+               alpha=0.75,outlier.shape=NA)+
+  facet_wrap(~variable,scales='free_y',labeller = as_labeller(
+               c(temp_80m = "Air Temperature at 80 m [C]", 
+                 pressure_80m = "Pressure at 80 m [Pa]",
+                 u_80m = "U at 80 m [m/s]",
+                 v_80m = "V at 80 m [m/s]",
+                 windspeed_80m = "Wind Speed at 80 m [m/s]")), 
+             strip.position='left')+
+  scale_fill_manual('',values=c(WTK='orange',WRF='steelblue'))+
+  theme_minimal()+
+  labs(x='Month', y=NULL, title = 'Average monthly wind across all sites')+
+  theme(strip.background = element_blank(), strip.placement = "outside")
+```
+
+
+```{r, fig.width=10, fig.height=10}
+valid_monthly_ave |> 
+  ggplot()+
+  geom_boxplot(aes(factor(month),error,group=month, fill=variable),outlier.shape=NA)+
+  facet_wrap(~variable,scales='free_y',labeller = as_labeller(
+               c(temp_80m = "Air Temperature at 80 m [C]", 
+                 pressure_80m = "Pressure at 80 m [Pa]",
+                 u_80m = "U at 80 m [m/s]",
+                 v_80m = "V at 80 m [m/s]",
+                 windspeed_80m = "Wind Speed at 80 m [m/s]")), 
+             strip.position='left')+
+  theme_minimal()+
+  labs(y=NULL, title = 'Average monthly wind error across all sites')+
+  theme(strip.background = element_blank(), strip.placement = "outside")
+```
+
+# Power by BA
+```{r, fig.width=10, fig.height=10}
+ggplot(valid |> filter(variable=='windspeed_80m') |>
+         inner_join(wind_plants |> 
+                      rename(lat=latitude,lon=longitude), 
+                    by=c('lon','lat')))+
+  geom_boxplot(aes(hour,err,group=hour),outlier.shape=NA)+
+  facet_wrap(~ba)+
+  labs(title='Error in hourly wind speed by BA', 
+       y='Wind Speed Error (m/s)')+
+  theme_bw()+
+  coord_cartesian(ylim=c(-10,10))
+```
+
+```{r, fig.width=10, fig.height=10}
+ggplot(power)+
+  geom_boxplot(aes(hour,error,group=hour),outlier.shape=NA)+
+  facet_wrap(~ba)+
+  labs(title='Error in hourly capacity factor by BA')+
+  theme_bw()+
+  coord_cartesian(ylim=c(-1,1))
+```
+
+```{r, fig.width=10, fig.height=10}
+ggplot(stats_hourly |> filter(variable=='windspeed_80m'))+
+  geom_boxplot(aes(hour,ME,group=hour),outlier.size = .5)+
+  labs(title='Mean Error in hourly wind speed factor by BA',
+       y='Mean Error (Capacity Factor)')+
+  facet_wrap(~ba,ncol = 5)+theme_bw()
+```
+
+```{r, fig.width=10, fig.height=10}
+ggplot(power_stats)+
+  geom_boxplot(aes(hour,ME,group=hour),outlier.size = .5)+
+  labs(title='Mean Error in hourly capacity factor by BA',
+       y='Mean Error (Capacity Factor)')+
+  facet_wrap(~ba,ncol = 5)+theme_bw()
+```
+
+```{r, fig.width=10, fig.height=10}
+ggplot(power_stats)+
+  geom_boxplot(aes(hour,PBIAS,group=hour),outlier.size = .5)+
+  facet_wrap(~ba,ncol = 5)+
+  labs(title='% Bias in hourly capacity factor by BA',
+       y='% Bias')+
+  coord_cartesian(ylim=c(-100,100))+
+  theme_bw()
+```
