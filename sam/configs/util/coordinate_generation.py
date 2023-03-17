@@ -1,12 +1,12 @@
 '''
 Author: Scott Underwood
-Created: 11/30/2022
 
 This script contains a function generate() which takes a desired number of turbines and a rotor
 diameter as inputs and generates x and y coordinates for a rectangular wind farm layout of the 
 desired size. The function returns the x and y coordinates as lists.
 '''
 import math
+
 
 def generate_coordinates(n_turbines, rotor_diameter):
     spacing = 8 * rotor_diameter # taken from SAM default value
