@@ -47,7 +47,7 @@ inconsistent
    * To fix this, a new coordinate set is developed for generators that do not meet the relationship, 
    where the left side of the equation must be between 95 and 100 percent of the nameplate capacity
 
-   $$turbine\_rated\_power * n\_coords \approx nameplate\_capacity$$
+   $$P_{rated,turbine} * n_{coords} \approx Cap_{nameplate}$$
    
    * New coordinate sets are developed for the above plants using the utility script `coordinate_generation.py`
 * reV can only handle generators with 300 coordinates or less - generators with more than 300 coordinates are split evenly into two entries
