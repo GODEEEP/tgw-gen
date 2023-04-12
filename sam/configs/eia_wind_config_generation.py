@@ -47,6 +47,9 @@ gens = gens.merge(model_matching, how='left',
 
 # get turbine rotor diameter and power curve
 turbine_models = pd.read_csv('./data/turbine_model_database.csv')
+# fix one incorrect entry identified (Unison U57 rated speed)
+i = turbine_models.index[turbine_models['model'] == 'U57'].tolist()[0]
+turbine_models.loc[i,'rated_speed'] = 11 # from manufacturer website
 # if there are duplicate entries for a model, only keep one with powercurve
 turbine_models = turbine_models.sort_values(by="power_kw", na_position='last').drop_duplicates(subset = ['manufacturer','model'], keep = 'first').sort_values(by='model').sort_values(by='manufacturer')
 gens = gens.merge(turbine_models, how='left', on=['manufacturer', 'model'])
