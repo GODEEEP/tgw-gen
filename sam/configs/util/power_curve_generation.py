@@ -28,14 +28,15 @@ def power_curve_generation(input_data, k):
         rated_speed = float(row['rated_speed'])
         cut_out = float(row['cut_out_speed'])
         rated_power = float(row['rated_power'])
+        model_data = pd.read_csv('./data/turbine_model_database.csv')
 
         # generate defaults for cut_in, cut_out, rated speeds based on averages if they are missing
         if cut_in != cut_in:
-            cut_in = input_data['cut_in_speed'].dropna().mean()
+            cut_in = model_data['cut_in_speed'].dropna().mean()
         if cut_out != cut_out:
-            cut_out = input_data['cut_out_speed'].dropna().mean()
+            cut_out = model_data['cut_out_speed'].dropna().mean()
         if rated_speed != rated_speed:
-            rated_speed = input_data['rated_speed'].dropna().mean()
+            rated_speed = model_data['rated_speed'].dropna().mean()
 
         # iterate through wind speeds 0 to 40 mph to generate corresponding power
         for speed in np.arange(0,40,0.5):

@@ -20,3 +20,5 @@ csp*
 sam_rev_wind_example.ipynb
 generated_coordinates.png
 wind_generator_coordinates.csv
+turbines_without_powercurves.csv
+analysis.py
