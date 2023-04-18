@@ -19,21 +19,46 @@ import pandas as pd
 import wrf
 from scipy.interpolate import griddata, interpn
 
+import pytz
+from timezonefinder import TimezoneFinder
+from datetime import datetime
+from tqdm import tqdm
+
 # %%
 # which years to process (one year at a time)
-years = list(range(2007, 2020+1))
+years = list(range(1998, 2000+1))
 
-csv_dir = 'valid_data/nsrdb'
+csv_dir = 'valid_data/nsrdb_eia/'
 # wrf_dir = '/rcfs/projects/godeeep/shared_data/tgw_wrf/tgw_wrf_historic/three_hourly'
 output_h5_template = '../data/sam_resource/nsrdb_1h_{year}.h5'
-meta_fn = '../data/meta_solar.csv'
+config_fn = '../sam/configs/eia_solar_configs.csv'
 
 # metadata with lat/lon sites, generated from meta.py
-meta = pd.read_csv(meta_fn)
+config = pd.read_csv(config_fn)
+config_unique = config.loc[~config[['lat', 'lon']].duplicated()]
 
 all_csv_files = os.listdir(csv_dir)
 
 run_time = time()
+
+
+def get_tz_offset2(latitude, longitude):
+  """
+  Get the UTC offset for a list of lat/lon points.
+
+  """
+  tf = TimezoneFinder()  # reuse
+
+  # query_points = [(13.358, 52.5061), (-120,42)]
+  offset = []
+  for lon, lat in tqdm(zip(longitude, latitude), total=len(longitude)):
+    tz = tf.timezone_at(lng=lon, lat=lat)
+    timezone = pytz.timezone(tz)
+    dt = datetime.utcnow()
+    offset.append(timezone.utcoffset(dt).total_seconds()/60/60)
+
+  return offset
+
 
 for year in years:
 
@@ -43,12 +68,20 @@ for year in years:
   output_h5 = output_h5_template.format(year=year)
 
   # only use files for the current year
-  csv_files = [x for x in all_csv_files if str(year) in x]
+  csv_files = [x for x in all_csv_files if f'_{str(year)}_' in x]
   # PIC might not return files alphabetically
   csv_files.sort()
 
   # initilize hdf5 output file, will overwrite the old one
   f = h5py.File(output_h5, 'w')
+
+  # metadata array
+  meta = pd.DataFrame({'latitude': config_unique.lat,
+                       'longitude': config_unique.lon,
+                       'timezone': get_tz_offset2(config_unique.lat, config_unique.lon),
+                       'elevation': [0] * len(config_unique.lat)})
+  ll = meta[['latitude', 'longitude']].to_numpy()
+
   f['meta'] = meta.to_records()
 
   wsname = 'wind_speed'
@@ -57,11 +90,11 @@ for year in years:
   dniname = 'dni'
 
   nsrdb = []
-  for fi in range(len(csv_files)):
+  for rowi, row in tqdm(config_unique.iterrows(), total=config_unique.shape[0]):
 
-    print(csv_files[fi])
+    # print(csv_files[fi])
 
-    csv_filei = os.path.join(csv_dir, csv_files[fi])
+    csv_filei = os.path.join(csv_dir, f'nsrdb_{year}_{row.plant_code:04}.csv')
     csv = (pd.read_csv(csv_filei, index_col='datetime', parse_dates=True)
            .rename({'Wind Speed': wsname,
                     'Temperature': tcname,
@@ -69,8 +102,9 @@ for year in years:
                     'DNI': dniname}, axis='columns')
            [['wind_speed', 'air_temperature', 'ghi', 'dni']])
     # the nrel data is at the center of the hour, so interpolate to whole hours
-    tmp = csv.resample('30T').interpolate().resample('H').interpolate().bfill()
-    nsrdb.append(tmp[tmp.index.notnull()])
+    csv.index = csv.index + pd.Timedelta(minutes=-30)
+    # tmp = csv.resample('30T').interpolate().resample('H').interpolate().bfill()
+    nsrdb.append(csv)
 
   # 8760 except for leap years
   n_time_steps = nsrdb[0].shape[0]
@@ -83,3 +117,5 @@ for year in years:
 
   f.close()
   print('\nWrote data to ' + output_h5)
+
+# %%
