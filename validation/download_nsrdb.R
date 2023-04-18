@@ -27,8 +27,6 @@ import::from(dplyr, rename, mutate, bind_rows, select, summarise, group_by, inne
 import::from(lubridate, hours, minutes, ymd_hms, month, day, hour, with_tz)
 import::from(tidyr, pivot_longer, fill)
 import::from(tibble, tibble, rownames_to_column)
-import::from(hydroGOF, NSE, me, mae, pbias, nrmse, rSD, KGE)
-import::from(rgdal, readOGR)
 import::from(zoo, na.approx)
 import::from(R.utils, withTimeout)
 
@@ -87,6 +85,8 @@ nsrdb_point <- function(lat, lon, year){
     mutate(datetime = ISOdatetime(Year, Month, Day, Hour, Minute, 0, tz='UTC'))
 }
 
+# download_file <- function(url, destfile, )
+
 for(valid_year in valid_years){
   
   nsrdb_cache_fn = sprintf('%s/nsrdb_list_%s.rds',cache_dir,valid_year)
@@ -115,9 +115,18 @@ for(valid_year in valid_years){
         })
         if(class(res)[1]=='try-error'){
           # do it again
-          nsrdb_list[[pointi]] = nsrdb_point(lat, lon, valid_year) |> 
-            mutate(point=pointi,lat=lat,lon=lon)
-          write_csv(nsrdb_list[[pointi]], csv_fn)
+          res2 = try({
+            withTimeout({
+              nsrdb_list[[pointi]] = nsrdb_point(lat, lon, valid_year) |> 
+                mutate(point=pointi,lat=lat,lon=lon)
+              write_csv(nsrdb_list[[pointi]], csv_fn)
+            }, timeout=10, onTimeout='error')
+          })
+          if(class(res2)[1]=='try-error'){
+            nsrdb_list[[pointi]] = nsrdb_point(lat, lon, valid_year) |> 
+              mutate(point=pointi,lat=lat,lon=lon)
+            write_csv(nsrdb_list[[pointi]], csv_fn)
+          }
         }
       }
       
