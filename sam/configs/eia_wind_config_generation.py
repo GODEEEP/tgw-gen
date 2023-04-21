@@ -7,10 +7,12 @@ used in reV.
 """
 
 import pandas as pd
+import requests
 from util.coordinate_generation import generate_coordinates
 from util.k_value_determination import determine_k_value
 from util.misc import dedup_names
 from util.power_curve_generation import power_curve_generation
+import yaml
 pd.options.mode.chained_assignment = None  # default='warn'
 
 WECC_ONLY = False  # switch for whether you want to filter to wecc only or not
@@ -47,9 +49,20 @@ gens = gens.merge(model_matching, how='left',
 
 # get turbine rotor diameter and power curve
 turbine_models = pd.read_csv('./data/turbine_model_database.csv')
+
 # fix one incorrect entry identified (Unison U57 rated speed)
 i = turbine_models.index[turbine_models['model'] == 'U57'].tolist()[0]
 turbine_models.loc[i,'rated_speed'] = 11 # from manufacturer website
+
+# add one missing power curve that we found from 
+# https://github.com/PyPSA/atlite/tree/master/atlite/resources/windturbine
+yml_txt = requests.get('https://raw.githubusercontent.com/PyPSA/atlite/master/atlite/resources/windturbine/Vestas_V90_3MW.yaml').text
+yml = yaml.safe_load(yml_txt)
+i = turbine_models.index[turbine_models['model'] == 'V90-3.0'].tolist()[0]
+turbine_models.loc[i,'wind_spd_ms'] = str(yml['V'])
+yml_power_kw = [p*1000 for p in yml['POW']] # convert to kw
+turbine_models.loc[i,'power_kw'] = str(yml_power_kw)
+
 # if there are duplicate entries for a model, only keep one with powercurve
 turbine_models = turbine_models.sort_values(by="power_kw", na_position='last').drop_duplicates(subset = ['manufacturer','model'], keep = 'first').sort_values(by='model').sort_values(by='manufacturer')
 gens = gens.merge(turbine_models, how='left', on=['manufacturer', 'model'])
