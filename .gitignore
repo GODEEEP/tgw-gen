@@ -22,3 +22,4 @@ sam/configs/util/temp*
 .DS_store
 .env
 __pycache__
+.Rproj.user

@@ -109,6 +109,7 @@ solar_configs_combined = solar_configs_uncombined |>
             nerc_region = nerc_region[1],
             azimuth = azimuth[1],
             tilt = tilt[1],
+            component_capacity_mw = paste0(system_capacity,collapse=','),
             # reV uses kW 
             system_capacity = sum(system_capacity) * 1000,
             module_type = module_type[1],
