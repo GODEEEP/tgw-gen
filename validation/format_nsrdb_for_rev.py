@@ -26,7 +26,7 @@ from tqdm import tqdm
 
 # %%
 # which years to process (one year at a time)
-years = list(range(1998, 2000+1))
+years = list(range(1998, 2020+1))
 
 csv_dir = 'valid_data/nsrdb_eia/'
 # wrf_dir = '/rcfs/projects/godeeep/shared_data/tgw_wrf/tgw_wrf_historic/three_hourly'

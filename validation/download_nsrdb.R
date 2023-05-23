@@ -89,13 +89,13 @@ nsrdb_point <- function(lat, lon, year){
 
 for(valid_year in valid_years){
   
-  nsrdb_cache_fn = sprintf('%s/nsrdb_list_%s.rds',cache_dir,valid_year)
+  #nsrdb_cache_fn = sprintf('%s/nsrdb_list_%s.rds',cache_dir,valid_year)
   
-  nsrdb_list = list()
+  # nsrdb_list = list()
   
-  if(file.exists(nsrdb_cache_fn)){
-    nsrdb_list = readRDS(nsrdb_cache_fn)
-  }else{
+  #if(file.exists(nsrdb_cache_fn)){
+  #  nsrdb_list = readRDS(nsrdb_cache_fn)
+  #}else{
     
     for (pointi in 1:nrow(pv_plants)){
       lat = pv_plants$lat[pointi]
@@ -104,35 +104,38 @@ for(valid_year in valid_years){
       message(valid_year, ' ', pointi, ' ', plant_code, ' ', lat,' ', lon)
       csv_fn = file.path(valid_data_dir, sprintf('nsrdb_%s_%04d.csv',valid_year, plant_code))
       if(file.exists(csv_fn)){
-        nsrdb_list[[pointi]] = read_csv(csv_fn, show=FALSE, progress=FALSE)
+        #nsrdb_list[[pointi]] = read_csv(csv_fn, show=FALSE, progress=FALSE)
       }else{
         res = try({
           withTimeout({
-            nsrdb_list[[pointi]] = nsrdb_point(lat, lon, valid_year) |> 
-              mutate(point=pointi,lat=lat,lon=lon)
-            write_csv(nsrdb_list[[pointi]], csv_fn)
+            # nsrdb_list[[pointi]] = 
+            nsrdb_point(lat, lon, valid_year) |> 
+              mutate(point=pointi,lat=lat,lon=lon) |>
+              write_csv(csv_fn)
           }, timeout=10, onTimeout='error')
         })
         if(class(res)[1]=='try-error'){
           # do it again
           res2 = try({
             withTimeout({
-              nsrdb_list[[pointi]] = nsrdb_point(lat, lon, valid_year) |> 
-                mutate(point=pointi,lat=lat,lon=lon)
-              write_csv(nsrdb_list[[pointi]], csv_fn)
+              # nsrdb_list[[pointi]] = 
+              nsrdb_point(lat, lon, valid_year) |> 
+                mutate(point=pointi,lat=lat,lon=lon) |>
+                write_csv(csv_fn)
             }, timeout=10, onTimeout='error')
           })
           if(class(res2)[1]=='try-error'){
-            nsrdb_list[[pointi]] = nsrdb_point(lat, lon, valid_year) |> 
-              mutate(point=pointi,lat=lat,lon=lon)
-            write_csv(nsrdb_list[[pointi]], csv_fn)
+            # nsrdb_list[[pointi]] = 
+              nsrdb_point(lat, lon, valid_year) |> 
+              mutate(point=pointi,lat=lat,lon=lon) |>
+            write_csv(csv_fn)
           }
         }
       }
       
       # data is at the 30 of every hour, assume this is representative of the hour
       # so basically drop the minute component
-      nsrdb_list[[pointi]] = nsrdb_list[[pointi]] |> select(-Minute)
+      #nsrdb_list[[pointi]] = nsrdb_list[[pointi]] |> select(-Minute)
       
       # # interpolate the data at every 30 minutes to the whole hour
       # mind = min(nsrdb_list[[pointi]]$datetime, na.rm=TRUE)
@@ -148,7 +151,7 @@ for(valid_year in valid_years){
       #          airtemp=na.approx(Temperature,na.rm=FALSE)) |>
       #   fill(point, lat, lon, ghi, dni, windspeed, airtemp, .direction='up') |>
       #   inner_join(d2,by='datetime')
-    }
-    saveRDS(nsrdb_list, nsrdb_cache_fn)
+    #}
+    #saveRDS(nsrdb_list, nsrdb_cache_fn)
   }
 }

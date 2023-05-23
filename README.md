@@ -1,25 +1,23 @@
-# WRF to reV 
+# TGW-Gen
 
-Scripts for converting WRF output to reV input files (wind and solar) and formatting that output for GridView.
+Scripts for converting TGW (WRF) output to reV input files (wind and solar) and producing generation timeseries at points or grid cell locations.
 
 ```mermaid
 flowchart TB
 
-    subgraph godeeep[WRF to reV]
+    subgraph godeeep[TGW-Gen]
         direction TB
     subgraph p0[ ]
         direction TB
 
         WRF[(WRF Data)]:::dataset
-        CERFInput[(Gen Timeseries)]:::dataset
-        gridview[(GridView Inputs)]:::dataset
+        timeseries[(Gen Timeseries)]:::dataset
         SAMH5[(SAM Resource Files)]:::dataset
         plants[(Plant Locations)]:::dataset
         plantconfig[(Plant configurations)]:::dataset
         biascorrect{{Bias Correction}}:::interface
         wrf2rev{{wrf2rev python scripts\nsolar, wind, csp}}:::interface
         reV{{reV}}:::interface
-        tzconvert{{Localize TZ}}:::interface
 
         click reV "https://github.com/NREL/reV" _blank
         click biascorrect "https://github.com/GODEEEP/godeeep/blob/main/WRF-to-reV/bias_correct.py" _blank
@@ -34,12 +32,10 @@ flowchart TB
             plants-->wrf2rev
             wrf2rev-->SAMH5
             plantconfig-->reV
-            SAMH5-->biascorrect
-            biascorrect-->reV
-            reV-->CERFInput
-            biascorrect-.->tzconvert
-            tzconvert-.->reV
-            CERFInput-->gridview
+            SAMH5-->reV
+            biascorrect-->timeseries
+            reV-->biascorrect
+
         end
         end
 
@@ -75,6 +71,10 @@ The follwing steps will allow you to develop annual (8760) hourly solar and
 wind generation profiles from WRF output, and optionally format that output 
 for GridView. 
 
+### Setting up the wrf python environment
+
+
+
 ### Setting up the rev python environment
 
 Before anything else, follow the instructions 
@@ -86,10 +86,11 @@ Additionally you will need to install the
 Other package requirements are included in the repo-wide `requirements.txt`.
 
 ### Metadata
-The metadata (`data/meta_{wind,solar}.csv`) contains information about each 
+The metadata (`sam/configs/eia_{wind,solar}_configs.csv`) contains information about each 
 point location, name, lat, lon, elevation, etc. Metadata files are committed 
 in this repo, but in case they need to be re-generated, please see the 
-`meta.py` file as well as the README in the `sam/configs` directory. 
+`eia_solar_config_generation.R` and `eia_wind_config_generation.py` file as well as the 
+README in the `sam/configs` directory. 
 
 ### Process WRF data 
 The `wrf2rev_*.py` code should be run on PIC where the WRF data is stored. 
@@ -111,7 +112,7 @@ NSRDB data is required for bias correcting the solar radiation data (GHI) and
 is also necessary for validation. To run wind validation you'll also need some 
 WTK data. To get both NSRDB and WTK data you'll need to 
 [signup](https://developer.nrel.gov/signup/) for an API key. Once you have 
-that, create a file named `.env` in the `WRF-to-reV` directory. The file 
+that, create a file named `.env` in the `tgw-gen` directory. The file 
 should have the following lines:
 
     nrel_api_key = 'key'
@@ -129,26 +130,12 @@ NSRDB. To fix this, some bias correction is necessary. If the NSRDB data has
 been downloaded simply run the `bias_correct.py` script. This will modify the 
 data in the SAM resource (hdf5) files directly. 
 
-### Convert to mountain time 
-This step is only necessary if you plan on creating GridView input files. 
-
-reV (SAM) is run 1 year at a time and so the input files contain only 1 year 
-of data. At this point the reV input files have been created with years 
-defined by UTC time. The script `data/convert_h5_to_mt.py` will read the data 
-out of the existing hdf5 files and create new hdf5 file a `_mt` post fix. The 
-working directory needs to be set to `data` when the script is run.
-
 ### Create generation profiles 
 Now you are finally ready to run reV and create the generation profiles. The 
 scripts `reV_solar.py` and `reV_wind.py` will create one csv file per year in 
 `data/generation`. By default the scripts will output generation as a fraction
 of total plant capacity. There is an option in the scripts to change the 
 output to power (watts).
-
-### Create GridView input files
-As a final optional step, you can create GridView input files by running the 
-script `convert_gen_for_gridview.R`, these will be output into 
-`data/gridview_wind_solar_cf_8760`. 
 
 ## Validation
 There are several more scripts and reports related to validating the met and gen data, please see the `README.md` in in the `validation` directory for more details. 

@@ -24,7 +24,7 @@ warnings.filterwarnings("ignore")
 logging.getLogger('rex').setLevel(logging.CRITICAL)
 logging.getLogger('reV').setLevel(logging.CRITICAL)
 
-years = list(range(1998, 2000+1))
+years = list(range(2018, 2020+1))
 
 config_fn = '../sam/configs/eia_solar_configs.csv'
 config = pd.read_csv(config_fn)
