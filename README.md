@@ -10,13 +10,12 @@ flowchart TB
     subgraph p0[ ]
         direction TB
 
-        WRF[(WRF Data)]:::dataset
+        WRF[(TGW Data)]:::dataset
         timeseries[(Gen Timeseries)]:::dataset
         SAMH5[(SAM Resource Files)]:::dataset
-        plants[(Plant Locations)]:::dataset
         plantconfig[(Plant configurations)]:::dataset
         biascorrect{{Bias Correction}}:::interface
-        wrf2rev{{wrf2rev python scripts\nsolar, wind, csp}}:::interface
+        wrf2rev{{Preprocess TGW Data}}:::interface
         reV{{reV}}:::interface
 
         click reV "https://github.com/NREL/reV" _blank
@@ -29,7 +28,6 @@ flowchart TB
             direction TB
             
             WRF-->wrf2rev
-            plants-->wrf2rev
             wrf2rev-->SAMH5
             plantconfig-->reV
             SAMH5-->reV
