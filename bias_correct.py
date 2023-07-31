@@ -15,13 +15,13 @@ from utils.sza import solar_zenith_and_azimuth_angle as sza_saa
 from tqdm import tqdm
 
 # which years to process data (one year at a time)
-wrf_years = list(range(1980, 2019+1))  # [1998]
+wrf_years = list(range(1980, 2022+1))  # [1998]
 
 # years to build the quantile mapping
 nsrdb_years = list(range(1998, 2020+1))
 
 in_csv_template = 'data/tgw-gen/solar/historical/solar_gen_cf_{year}.csv'
-out_csv_template = 'data/tgw-gen/solar/historical/solar_gen_cf_{year}_bc.csv'
+out_csv_template = 'data/tgw-gen/solar/historical_bc/solar_gen_cf_{year}_bc.csv'
 config_fn = 'data/tgw-gen/solar/eia_solar_configs.csv'
 
 # metadata with lat/lon sites, generated from meta.py

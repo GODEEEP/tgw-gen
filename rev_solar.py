@@ -284,12 +284,18 @@ if __name__ == '__main__':
   year = sys.argv[2]
   input_dir = sys.argv[3]
   output_dir = sys.argv[4]
+  config_fn = sys.argv[5]
 
   print(f'Running reV solar {mode} mode for {year}...')
   if mode == 'grid':
     run_rev_solar_grid_year(year, input_dir, output_dir)
   elif mode == 'points':
-    config_fn = 'sam/configs/eia_solar_configs.csv'
+    # config_fn = 'sam/configs/eia_solar_configs.csv'
     run_rev_solar_points_year(year, input_dir, output_dir, config_fn)
   else:
-    raise Exception("Valid mode must be 'grid' or 'points'\n\nUsage:\n\npython rev_solar.py [mode] [year]")
+    raise Exception(
+        """Valid mode must be 'grid' or 'points'
+        
+        Usage:
+        
+        python rev_solar.py mode year in_dir out_dir config_fn""")

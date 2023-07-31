@@ -13,9 +13,11 @@ flowchart TB
         WRF[(TGW Data)]:::dataset
         timeseries[(Gen Timeseries)]:::dataset
         SAMH5[(SAM Resource Files)]:::dataset
+        eia860[(EIA 860)]:::dataset
+        ppconfigs{{Preprocess\nPlant Configurations}}:::interface
         plantconfig[(Plant configurations)]:::dataset
         biascorrect{{Bias Correction}}:::interface
-        wrf2rev{{Preprocess TGW Data}}:::interface
+        wrf2rev{{Preprocess\nTGW Data}}:::interface
         reV{{reV}}:::interface
 
         click reV "https://github.com/NREL/reV" _blank
@@ -29,6 +31,8 @@ flowchart TB
             
             WRF-->wrf2rev
             wrf2rev-->SAMH5
+            eia860-->ppconfigs
+            ppconfigs-->plantconfig
             plantconfig-->reV
             SAMH5-->reV
             biascorrect-->timeseries
@@ -37,7 +41,7 @@ flowchart TB
         end
         end
 
-        subgraph legend[Legend]
+        subgraph legend[ ]
         subgraph p2[ ]
             dataset[(dataset)]:::dataset
             interface{{interface}}:::interface

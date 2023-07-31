@@ -284,6 +284,7 @@ if __name__ == '__main__':
   year = sys.argv[2]
   input_dir = sys.argv[3]
   output_dir = sys.argv[4]
+  config_fn = sys.argv[5]
   # only applies to grid mode
   try:
     hub_height = sys.argv[5]
@@ -294,7 +295,12 @@ if __name__ == '__main__':
   if mode == 'grid':
     run_rev_wind_grid_year(year, input_dir, output_dir, hub_height)
   elif mode == 'points':
-    config_fn = 'sam/configs/eia_wind_configs.csv'
+    # config_fn = 'sam/configs/eia_wind_configs.csv'
     run_rev_wind_points_year(year, input_dir, output_dir, config_fn)
   else:
-    raise Exception("Valid mode must be 'grid' or 'points'\n\nUsage:\n\npython rev_wind.py [mode] [year]")
+    raise Exception(
+        """Valid mode must be 'grid' or 'points'
+        
+        Usage:
+        
+        python rev_wind.py mode year in_dir out_dir config_fn [hub_height]""")
