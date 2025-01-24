@@ -14,10 +14,10 @@ flowchart TB
         timeseries[(Gen Timeseries)]:::dataset
         SAMH5[(SAM Resource Files)]:::dataset
         eia860[(EIA 860)]:::dataset
-        ppconfigs{{Preprocess\nPlant Configurations}}:::interface
+        ppconfigs{{Preprocess Plant Configurations}}:::interface
         plantconfig[(Plant configurations)]:::dataset
         biascorrect{{Bias Correction}}:::interface
-        wrf2rev{{Preprocess\nTGW Data}}:::interface
+        wrf2rev{{Preprocess TGW Data}}:::interface
         reV{{reV}}:::interface
 
         click reV "https://github.com/NREL/reV" _blank
