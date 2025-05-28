@@ -26,11 +26,11 @@ from tqdm import tqdm
 
 # %%
 # which years to process (one year at a time)
-years = list(range(1998, 2020+1))
+years = list(range(2007, 2020+1))
 
 csv_dir = 'valid_data/nsrdb_eia/'
 # wrf_dir = '/rcfs/projects/godeeep/shared_data/tgw_wrf/tgw_wrf_historic/three_hourly'
-output_h5_template = '../data/sam_resource/nsrdb_1h_{year}.h5'
+output_h5_template = '/Volumes/data/tgw-gen-data/sam_resource/nsrdb_1h_{year}.h5'
 config_fn = '../sam/configs/eia_solar_configs.csv'
 
 # metadata with lat/lon sites, generated from meta.py

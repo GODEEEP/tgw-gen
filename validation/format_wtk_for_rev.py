@@ -20,21 +20,46 @@ import pandas as pd
 import wrf
 from scipy.interpolate import griddata, interpn
 
+import pytz
+from timezonefinder import TimezoneFinder
+from datetime import datetime
+from tqdm import tqdm
+
 # %%
 # which years to process (one year at a time)
 years = list(range(2007, 2014+1))
 
-csv_dir = 'valid_data/wtk'
+csv_dir = 'valid_data/wtk_eia'
 # wrf_dir = '/rcfs/projects/godeeep/shared_data/tgw_wrf/tgw_wrf_historic/three_hourly'
-output_h5_template = '../data/sam_resource/wtk_1h_{year}.h5'
-meta_fn = '../data/meta_wind.csv'
+output_h5_template = '/Volumes/data/tgw-gen-data/sam_resource/wtk_1h_{year}.h5'
+meta_fn = '../sam/configs/eia_solar_configs.csv'
 
 # metadata with lat/lon sites, generated from meta.py
 meta = pd.read_csv(meta_fn)
+config_unique = meta.loc[~meta[['lat', 'lon']].duplicated()]
 
 all_csv_files = os.listdir(csv_dir)
 
 run_time = time()
+
+
+def get_tz_offset2(latitude, longitude):
+  """
+  Get the UTC offset for a list of lat/lon points.
+
+  """
+  tf = TimezoneFinder()  # reuse
+
+  # query_points = [(13.358, 52.5061), (-120,42)]
+  offset = []
+  for lon, lat in tqdm(zip(longitude, latitude), total=len(longitude)):
+    tz = tf.timezone_at(lng=lon, lat=lat)
+    timezone = pytz.timezone(tz)
+    dt = datetime.utcnow()
+    offset.append(timezone.utcoffset(dt).total_seconds()/60/60)
+
+  return offset
+
 
 for year in years:
   # output file for this year
@@ -47,6 +72,14 @@ for year in years:
 
   # initilize hdf5 output file, will overwrite the old one
   f = h5py.File(output_h5, 'w')
+
+  # metadata array
+  meta = pd.DataFrame({'latitude': config_unique.lat,
+                       'longitude': config_unique.lon,
+                       'timezone': get_tz_offset2(config_unique.lat, config_unique.lon),
+                       'elevation': [0] * len(config_unique.lat)})
+  ll = meta[['latitude', 'longitude']].to_numpy()
+
   f['meta'] = meta.to_records()
 
   wsname = 'windspeed_80m'
@@ -55,9 +88,9 @@ for year in years:
   tcname = 'temperature_80m'
 
   wtk = []
-  for fi in range(len(csv_files)):
+  for fi in tqdm(range(len(csv_files)), total=len(csv_files)):
 
-    print(csv_files[fi])
+    # print(csv_files[fi])
 
     csv_filei = os.path.join(csv_dir, csv_files[fi])
     csv = (pd.read_csv(csv_filei, index_col='datetime', parse_dates=True)
@@ -66,8 +99,8 @@ for year in years:
                     'air pressure at 100m (Pa)': prname,
                     'air temperature at 80m (C)': tcname}, axis='columns')
            [[wsname, wdname, prname, tcname]])
-    #csv['u_80m'] = - np.abs(csv['windspeed_80m'])*np.sin(csv['winddir_80m'])
-    #csv['v_80m'] = - np.abs(csv['windspeed_80m'])*np.cos(csv['winddir_80m'])
+    # csv['u_80m'] = - np.abs(csv['windspeed_80m'])*np.sin(csv['winddir_80m'])
+    # csv['v_80m'] = - np.abs(csv['windspeed_80m'])*np.cos(csv['winddir_80m'])
     # the nrel data is at the center of the hour, so interpolate to whole hours
     wtk.append(csv.resample('30T').interpolate().resample('H').interpolate().bfill())
 
