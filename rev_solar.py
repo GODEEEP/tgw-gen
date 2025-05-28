@@ -74,10 +74,10 @@ def run_rev_solar_single_point(
 
     # run reV
     pp_wrf = ProjectPoints.lat_lon_coords(ll, resource_fn, config_dict)
-    cf = Gen.reV_run('pvwattsv5', pp_wrf, config_dict, resource_fn,
-                     max_workers=1, out_fpath=None,
+    gen = Gen('pvwattsv5', pp_wrf, config_dict, resource_fn,
                      output_request=('cf_profile'))
-  return cf.out['cf_profile']
+    gen.run(max_workers=1)
+  return gen.out['cf_profile']
 
 
 def run_rev_solar_grid_year(
@@ -187,6 +187,9 @@ def run_rev_solar_points_year(
   else:
     solar = xr.open_dataset(nc_file)
 
+  if year == '2024':
+    solar = dupe_last3_timesteps(solar)
+
   # get date stamps as string
   solar_date_times = pd.to_datetime(solar['Time'], utc=True)
   solar_date_stamps = list(solar_date_times.strftime('%Y-%m-%d %H:%M:%S'))
@@ -277,6 +280,21 @@ def solar_config_dicts_from_rows(config):
 
     config_dicts[rowi] = row.to_dict()
   return config_dicts
+
+def dupe_last3_timesteps(data):
+  # Select timesteps to duplicate
+  data_to_duplicate = data.sel(Time=data.Time[-3:])
+
+  # add 3 hours
+  data_to_duplicate['Time'] = pd.to_datetime(data_to_duplicate.Time) + pd.Timedelta("3h") 
+
+  # convert back to int64
+  data_to_duplicate['Time'] = data_to_duplicate['Time'].astype('int64')
+
+  # Merge the duplicated timestep back into the original dataset
+  duplicated_dataset = xr.concat([data, data_to_duplicate], dim="Time")
+
+  return duplicated_dataset
 
 
 if __name__ == '__main__':
